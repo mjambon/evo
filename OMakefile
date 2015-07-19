@@ -1,0 +1,17 @@
+USE_OCAMLFIND = true
+NATIVE_ENABLED = true
+BYTE_ENABLED = false
+
+OCAMLPACKS =
+OCAMLFLAGS = -annot
+OCAMLDEP_MODULES_ENABLED = false
+
+.DEFAULT: evo.opt fitvar.opt env.opt
+
+OCamlProgram(evo, evo)
+OCamlProgram(fitvar, fitvar)
+OCamlProgram(env, env)
+
+.PHONY: clean
+clean:
+	rm -f *.opt *.run *.o *.a *.s *.cm* *~ *.annot
