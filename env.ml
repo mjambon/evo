@@ -37,6 +37,9 @@
 
 open Printf
 
+let random_bool f =
+  Random.float 1. < f
+
 let uniform_distribution () =
   Random.float 1.
 
@@ -49,63 +52,136 @@ let exponential_distribution lambda =
   -. log (uniform_distribution ()) /. lambda
 
 (*
-   Average ages of death assuming no other possible cause of death
+   Average ages of death for one gene
+   assuming no other possible cause of death
 *)
-let mean_age_of_death_a = 100.
-let mean_age_of_death_a_plus = 200.
+let mean_age_of_death_minus = 100.
+let mean_age_of_death_plus = 110.
 
-let mean_age_of_death_b = 100.
-let mean_age_of_death_b_plus = 200.
+let lambda_minus = 1. /. mean_age_of_death_minus
+let lambda_plus = 1. /. mean_age_of_death_plus
 
-let mean_age_of_death_other = 40.
+type genome = bool array
 
-let lambda_a = 1. /. mean_age_of_death_a
-let lambda_a_plus = 1. /. mean_age_of_death_a_plus
-
-let lambda_b = 1. /. mean_age_of_death_b
-let lambda_b_plus = 1. /. mean_age_of_death_b_plus
-
-let lambda_other = 1. /. mean_age_of_death_other
-
-type genome = {
-  a_plus: bool;
-  b_plus: bool;
-}
+let sob = function
+  | true -> "1"
+  | false -> "0"
 
 let string_of_genome x =
-  sprintf "{%s %s}"
-    (if x.a_plus then "A+" else "A ")
-    (if x.b_plus then "B+" else "B ")
+  sprintf "{%s}"
+    (String.concat "" (List.map sob (Array.to_list x)))
 
-let print_report gen cause age =
-  printf "%s cause %s, age %.2f\n"
-    (string_of_genome gen) cause age
+let print_individual_report gen i age =
+  printf "%s cause %i(%s), age %.2f\n"
+    (string_of_genome gen)
+    i (sob gen.(i))
+    age
+
+let print_population_report gens =
+  assert (Array.length gens > 0);
+  let gene_count = Array.length gens.(0) in
+  let plus_fractions =
+    Array.init gene_count (fun i ->
+      let n =
+        Array.fold_left (fun acc gen ->
+          if gen.(i) then acc + 1
+          else acc
+        ) 0 gens
+      in
+      float n /. float (Array.length gens)
+    )
+  in
+  Array.iteri (fun i x ->
+    printf "gene %i: %.2f%%\n" i (100. *. x)
+  ) plus_fractions
+
+let mini a =
+  assert (Array.length a > 0);
+  BatArray.fold_lefti (fun ((_, m) as best) i v ->
+    if v < m then (i, v)
+    else best
+  ) (0, a.(0)) a
 
 let sim_one gen =
   (*
      Obtain age of an individual when first lethal accident
-     for each cause of death (A, B, other) occurs
+     for each cause of death (one of the genes) occurs
   *)
-  let a =
-    exponential_distribution
-      (if gen.a_plus then lambda_a_plus else lambda_a)
+  let ages =
+    Array.mapi (fun i g ->
+      let lambda =
+        match g with
+        | true -> lambda_plus
+        | false -> lambda_minus
+      in
+      let age = exponential_distribution lambda in
+      age
+    ) gen
   in
-  let b =
-    exponential_distribution
-      (if gen.b_plus then lambda_b_plus else lambda_b)
+  let i, age_of_death = mini ages in
+  print_individual_report gen i age_of_death;
+  age_of_death
+
+(* Scale elements of the array such that their sum equals 1 *)
+let normalize a =
+  let sum = Array.fold_left (+.) 0. a in
+  Array.map (fun x -> x /. sum) a
+
+(* In-place swapping of some fraction of the genes between
+   random individuals *)
+let recombine gens0 =
+  let gens = Array.map Array.copy gens0 in
+  let pop_size = Array.length gens in
+  assert (pop_size > 0);
+  let gene_count = Array.length gens.(0) in
+  for i = 0 to pop_size - 1 do
+    for g = 0 to gene_count - 1 do
+      if random_bool 0.1 then
+        let j = Random.int pop_size in
+        if i <> j then
+          let tmp = gens.(i).(g) in
+          gens.(i).(g) <- gens.(j).(g);
+          gens.(j).(g) <- tmp
+    done
+  done;
+  gens
+
+(* Simulate a population over max_generations *)
+let rec sim_pop max_generations generation target_pop_size gens =
+  printf "--- Generation %i ---\n%!" generation;
+  printf "Population size: %i\n" (Array.length gens);
+  print_population_report gens;
+  let ages = Array.map sim_one gens in
+  let relative_weights = normalize ages in
+  let child_counts = Array.map (fun w ->
+    truncate (w *. float target_pop_size +. 0.5)
+  ) relative_weights
   in
-  let other =
-    exponential_distribution lambda_other
+  let new_pop_size = Array.fold_left (+) 0 child_counts in
+  assert (new_pop_size >= 1);
+  let cloned_children =
+    Array.concat (
+      Array.to_list (
+        Array.mapi (fun i gen ->
+          Array.make child_counts.(i) (Array.copy gen)
+        ) gens
+      )
+    )
   in
-  let cause_of_death, age =
-    let sorted =
-      List.sort (fun (_, x) (_, y) -> compare x y)
-        ["A", a;
-         "B", b;
-         "other", other]
-    in
-    match sorted with
-    | (cause, age) :: _ -> cause, age
-    | _ -> assert false
+  let children = recombine cloned_children in
+  if generation < max_generations then
+    sim_pop max_generations (generation + 1) target_pop_size children
+
+let main () =
+  let max_generations = 1000 in
+  let gene_count = 10 in
+  let plus_allele_freq = 0.1 in
+  let target_pop_size = 1000 in
+  let gens =
+    Array.init target_pop_size (fun _ ->
+      Array.init gene_count (fun _ -> random_bool plus_allele_freq)
+    )
   in
-  print_report gen cause_of_death age
+  sim_pop max_generations 1 target_pop_size gens
+
+let () = main ()
