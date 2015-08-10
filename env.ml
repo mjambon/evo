@@ -37,6 +37,8 @@
 
 open Printf
 
+let debug = false
+
 let random_bool f =
   Random.float 1. < f
 
@@ -79,21 +81,33 @@ let print_individual_report gen i age =
 
 let print_population_report gens =
   assert (Array.length gens > 0);
+  let pop_size = Array.length gens in
   let gene_count = Array.length gens.(0) in
-  let plus_fractions =
+  let plus_counts =
     Array.init gene_count (fun i ->
-      let n =
-        Array.fold_left (fun acc gen ->
-          if gen.(i) then acc + 1
-          else acc
-        ) 0 gens
-      in
-      float n /. float (Array.length gens)
+      Array.fold_left (fun acc gen ->
+        if gen.(i) then acc + 1
+        else acc
+      ) 0 gens
     )
+  in
+  let plus_fractions =
+    Array.map (fun n -> float n /. float pop_size) plus_counts
+  in
+  let is_stable =
+    BatArray.for_all (fun n -> n = 0 || n = pop_size) plus_counts
+  in
+  let successful_genes =
+    let n =
+      Array.fold_left
+        (fun acc n -> if n = pop_size then acc + 1 else acc) 0 plus_counts
+    in
+    float n /. float gene_count
   in
   Array.iteri (fun i x ->
     printf "gene %i: %.2f%%\n" i (100. *. x)
-  ) plus_fractions
+  ) plus_fractions;
+  is_stable, successful_genes
 
 let mini a =
   assert (Array.length a > 0);
@@ -119,7 +133,8 @@ let sim_one gen =
     ) gen
   in
   let i, age_of_death = mini ages in
-  print_individual_report gen i age_of_death;
+  if debug then
+    print_individual_report gen i age_of_death;
   age_of_death
 
 (* Scale elements of the array such that their sum equals 1 *)
@@ -130,13 +145,14 @@ let normalize a =
 (* In-place swapping of some fraction of the genes between
    random individuals *)
 let recombine gens0 =
+  let fraction_swapped = 0.05 in
   let gens = Array.map Array.copy gens0 in
   let pop_size = Array.length gens in
   assert (pop_size > 0);
   let gene_count = Array.length gens.(0) in
   for i = 0 to pop_size - 1 do
     for g = 0 to gene_count - 1 do
-      if random_bool 0.1 then
+      if random_bool (0.5 *. fraction_swapped) then
         let j = Random.int pop_size in
         if i <> j then
           let tmp = gens.(i).(g) in
@@ -150,30 +166,39 @@ let recombine gens0 =
 let rec sim_pop max_generations generation target_pop_size gens =
   printf "--- Generation %i ---\n%!" generation;
   printf "Population size: %i\n" (Array.length gens);
-  print_population_report gens;
-  let ages = Array.map sim_one gens in
-  let relative_weights = normalize ages in
-  let child_counts = Array.map (fun w ->
-    truncate (w *. float target_pop_size +. 0.5)
-  ) relative_weights
-  in
-  let new_pop_size = Array.fold_left (+) 0 child_counts in
-  assert (new_pop_size >= 1);
-  let cloned_children =
-    Array.concat (
-      Array.to_list (
-        Array.mapi (fun i gen ->
-          Array.make child_counts.(i) (Array.copy gen)
-        ) gens
+  let is_stable, successful_genes = print_population_report gens in
+  if is_stable then
+    printf "\
+--- reached stability at generation %i ---
+Successfully selected genes: %.2f%%
+"
+      generation
+      (100. *. successful_genes)
+  else
+    let ages = Array.map sim_one gens in
+    let relative_weights = normalize ages in
+    let child_counts = Array.map (fun w ->
+      truncate (w *. float target_pop_size +. 0.5)
+    ) relative_weights
+    in
+    let new_pop_size = Array.fold_left (+) 0 child_counts in
+    assert (new_pop_size >= 1);
+    let cloned_children =
+      Array.concat (
+        Array.to_list (
+          Array.mapi (fun i gen ->
+            Array.make child_counts.(i) (Array.copy gen)
+          ) gens
+        )
       )
-    )
-  in
-  let children = recombine cloned_children in
-  if generation < max_generations then
-    sim_pop max_generations (generation + 1) target_pop_size children
+    in
+    let children = recombine cloned_children in
+    if generation < max_generations then
+      sim_pop max_generations (generation + 1) target_pop_size children
 
 let main () =
-  let max_generations = 1000 in
+  Random.self_init ();
+  let max_generations = 10_000 in
   let gene_count = 10 in
   let plus_allele_freq = 0.1 in
   let target_pop_size = 1000 in
